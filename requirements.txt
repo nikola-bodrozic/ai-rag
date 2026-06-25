@@ -27,3 +27,8 @@ sentence-transformers==3.0.1
 
 # Pomoćne biblioteke
 python-dotenv==1.2.2
+
+# Parseri za PDF i HTML5
+pypdf==4.2.0
+beautifulsoup4==4.12.3
+lxml==5.2.2
