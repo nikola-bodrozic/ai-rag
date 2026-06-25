@@ -1,41 +1,65 @@
-﻿import sys
+﻿# -*- coding: utf-8 -*-
+import sys
 import os
 from dotenv import load_dotenv
-from langchain_groq import ChatGroq  # NOVI UVOZ ZA GROQ
+
+# Uvozi koji su ti neophodni za rad celog lanca
+from langchain_groq import ChatGroq
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_chroma import Chroma
+from qdrant_client import QdrantClient
+from langchain_community.vectorstores import Qdrant
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import TextLoader, DirectoryLoader
+
+# Učitavanje .env fajla
 load_dotenv()
-# 🔒 POSTAVI SVOJ API KLJUČ OVDE
 api_key = os.getenv("GROQ_API_KEY")
+
+if not api_key:
+    print("⚠️ Greška: GROQ_API_KEY nije pronađen u okruženju!")
+    sys.exit()
 
 FOLDER_SA_DOKUMENTIMA = "./dokumentacija"
 
 # ==========================================
-# 1. UČITAVANJE I CEPCANJE FAJLOVA (Ostaje isto)
+# 1. UČITAVANJE I CEPKANJE FAJLOVA
 # ==========================================
 print("📂 Učitavam dokumente iz foldera...")
+if not os.path.exists(FOLDER_SA_DOKUMENTIMA):
+    os.makedirs(FOLDER_SA_DOKUMENTIMA)
+
 loader_txt = DirectoryLoader(FOLDER_SA_DOKUMENTIMA, glob="**/*.txt", loader_cls=TextLoader, loader_kwargs={'encoding': 'utf-8'})
 loader_md = DirectoryLoader(FOLDER_SA_DOKUMENTIMA, glob="**/*.md", loader_cls=TextLoader, loader_kwargs={'encoding': 'utf-8'})
 dokumenti = loader_txt.load() + loader_md.load()
 
 if not dokumenti:
-    print(f"⚠️ Folder '{FOLDER_SA_DOKUMENTIMA}' je prazan.")
+    print(f"⚠️ Folder '{FOLDER_SA_DOKUMENTIMA}' je prazan. Ubaci fajlove pa pokreni ponovo.")
     sys.exit()
 
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
 izrezani_delovi = text_splitter.split_documents(dokumenti)
 
 # ==========================================
-# 2. LOKALNA VEKTORSKA BAZA (Ostaje isto)
+# 2. VEKTORSKA BAZA (Povezivanje na Qdrant u Dockeru)
 # ==========================================
-print("🧠 Indeksiranje podataka u lokalnu Chromu...")
+print("🧠 Indeksiranje podataka u Qdrant vektorsku bazu...")
 embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-vektorska_baza = Chroma.from_documents(izrezani_delovi, embedding_model)
+
+# QDRANT_HOST se vuče iz docker-compose.yml, lokalno se vraća na localhost ako testiraš van Dockera
+qdrant_host = os.getenv("QDRANT_HOST", "localhost")
+client = QdrantClient(host=qdrant_host, port=6333)
+
+# Kreiramo indeks direktno iz dokumenata unutar Qdrant-a
+vektorska_baza = Qdrant.from_documents(
+    documents=izrezani_delovi,
+    embedding=embedding_model,
+    host=qdrant_host,
+    port=6333,
+    collection_name="moj_rag_collection"
+)
 retriever = vektorska_baza.as_retriever(search_kwargs={"k": 3})
 
 # ==========================================
@@ -69,7 +93,7 @@ rag_lanac = (
 # ==========================================
 # 5. INTERAKTIVNI RAD
 # ==========================================
-print("\n🚀 RAG sistem sa Groq-om je spreman!")
+print("\n🚀 RAG sistem sa Groq-om i Qdrant-om je spreman!")
 print("Upisi 'izlaz' za kraj programa.\n")
 
 while True:

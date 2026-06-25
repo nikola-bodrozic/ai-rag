@@ -1,2 +1,5 @@
 .venv
 .env
+pip_temp/
+ScanFiles.ps1
+RepositoryContents.txt
