@@ -18,14 +18,21 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import TextLoader, DirectoryLoader, PyPDFLoader, BSHTMLLoader
 from qdrant_client import QdrantClient
+from qdrant_client.http import models as rest_models
 
-# 🔥 NOVI UVOZI ZA MEMORIJU
-from langchain_community.chat_message_histories import ChatMessageHistory
+# Uvozi za memoriju
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
-
+from langchain_community.chat_message_histories import ChatMessageHistory
+# ✅ ISPRAVNA LINIJA:
+from langchain_core.messages import BaseMessage, messages_from_dict, messages_to_dict
 # Učitavanje .env fajla
 load_dotenv()
+
+# Globalne konfiguracije za Qdrant povučene iz okruženja
+QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
+QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
+COLLECTION_ISTORIJA = "chat_history"
 
 # ==========================================
 # 1. LIFESPAN MANAGEMENT
@@ -43,26 +50,86 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI RAG Pipeline API",
-    description="API za RAG sa Groq, Qdrant i Memorijom",
-    version="1.1.0",
+    description="API za RAG sa Groq, Qdrant i Trajnom Memorijom",
+    version="1.2.2",
     lifespan=lifespan
 )
 
 # ==========================================
-# 2. GLOBALNE PROMENLJIVE & MEMORIJA
+# 2. CUSTOM QDRANT MEMORY KLASA
+# ==========================================
+class PouzdanaQdrantMemorija(BaseChatMessageHistory):
+    """Custom klasa koja ručno upisuje i čita istoriju iz Qdranta bez oslanjanja na problematične LangChain uvoze"""
+    def __init__(self, session_id: str, client: QdrantClient):
+        self.session_id = session_id
+        self.client = client
+        
+        # Kreiramo kolekciju za istoriju ako ne postoji
+        try:
+            self.client.get_collection(COLLECTION_ISTORIJA)
+        except Exception:
+            self.client.create_collection(
+                collection_name=COLLECTION_ISTORIJA,
+                vectors_config={}, # Ne trebaju nam vektori za samu istoriju poruka, čuvamo kao payload
+            )
+
+    @property
+    def messages(self) -> list[BaseMessage]:
+        # Tražimo poruke za ovu sesiju
+        points, _ = self.client.scroll(
+            collection_name=COLLECTION_ISTORIJA,
+            scroll_filter=rest_models.Filter(
+                must=[rest_models.FieldCondition(key="session_id", match=rest_models.MatchValue(value=self.session_id))]
+            ),
+            limit=1
+        )
+        if points and points[0].payload and "messages" in points[0].payload:
+            return messages_from_dict(points[0].payload["messages"])
+        return []
+
+    def add_message(self, message: BaseMessage) -> None:
+        trenutne_poruke = messages_to_dict(self.messages)
+        trenutne_poruke.append(messages_to_dict([message])[0])
+        
+        # Generišemo fiksni ID tačke na osnovu session_id-a da bismo uvek radili upsert (update) istog dokumenta
+        point_id = int(hashlib.md5(self.session_id.encode('utf-8')).hexdigest()[:16], 16)
+        
+        self.client.upsert(
+            collection_name=COLLECTION_ISTORIJA,
+            points=[
+                rest_models.PointStruct(
+                    id=point_id,
+                    vector={},
+                    payload={
+                        "session_id": self.session_id,
+                        "messages": trenutne_poruke
+                    }
+                )
+            ]
+        )
+
+    def clear(self) -> None:
+        point_id = int(hashlib.md5(self.session_id.encode('utf-8')).hexdigest()[:16], 16)
+        try:
+            self.client.delete(collection_name=COLLECTION_ISTORIJA, points_selector=[point_id])
+        except Exception:
+            pass
+
+
+# ==========================================
+# 3. GLOBALNE PROMENLJIVE & INICIJALIZACIJA
 # ==========================================
 rag_chain = None
 embedding_model = None
 vectorstore = None
-
-# 🔥 Skladište za istoriju razgovora (In-Memory)
-sessions_db = {}
+retriever = None
+zajednicki_qdrant_client = None
 
 def get_session_history(session_id: str) -> BaseChatMessageHistory:
-    """Pomaže sistemu da pronađe ili kreira istoriju za određeni session_id"""
-    if session_id not in sessions_db:
-        sessions_db[session_id] = ChatMessageHistory()
-    return sessions_db[session_id]
+    """Poziva našu custom stabilnu Qdrant memoriju"""
+    if zajednicki_qdrant_client is None:
+        raise Exception("Qdrant klijent nije spreman.")
+    return PouzdanaQdrantMemorija(session_id=session_id, client=zajednicki_qdrant_client)
 
 def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
@@ -80,7 +147,7 @@ def get_file_md5(file_path):
 
 def initialize_rag_pipeline():
     """Inicijalizuje RAG pipeline, proverava MD5 i osvežava Qdrant"""
-    global rag_chain, embedding_model, vectorstore
+    global rag_chain, embedding_model, vectorstore, retriever, zajednicki_qdrant_client
     
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
@@ -126,22 +193,20 @@ def initialize_rag_pipeline():
             novi_ili_izmenjeni_dokumenti.append(doc)
 
     embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-    qdrant_host = os.getenv("QDRANT_HOST", "localhost")
-    qdrant_port = int(os.getenv("QDRANT_PORT", 6333))
     
-    client = QdrantClient(host=qdrant_host, port=qdrant_port)
+    # Inicijalizujemo globalni zajednički klijent
+    zajednicki_qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
     COLLECTION_NAME = "dokumentacija"
 
     if novi_ili_izmenjeni_dokumenti:
         print(f"♻️ Detektovano {len(novi_ili_izmenjeni_dokumenti)} dokumenata za osvežavanje.")
         
-        vectorstore = Qdrant(client=client, collection_name=COLLECTION_NAME, embeddings=embedding_model)
-        from qdrant_client.http import models as rest_models
+        vectorstore = Qdrant(client=zajednicki_qdrant_client, collection_name=COLLECTION_NAME, embeddings=embedding_model)
         
         izmenjeni_fajlovi = set(doc.metadata.get('source') for doc in novi_ili_izmenjeni_dokumenti if doc.metadata.get('source'))
         for stari_fajl in izmenjeni_fajlovi:
             print(f"🗑️ Čistim stare zapise iz Qdrant baze za: {stari_fajl}")
-            client.delete(
+            zajednicki_qdrant_client.delete(
                 collection_name=COLLECTION_NAME,
                 points_selector=rest_models.Filter(
                     must=[rest_models.FieldCondition(key="metadata.source", match=rest_models.MatchValue(value=stari_fajl))]
@@ -159,35 +224,34 @@ def initialize_rag_pipeline():
         print("💾 Lista MD5 heševa je uspešno ažurirana.")
     else:
         print("🔒 Svi fajlovi su već indeksirani (MD5 se poklapa). Preskačem slanje u Qdrant.")
-        vectorstore = Qdrant(client=client, collection_name=COLLECTION_NAME, embeddings=embedding_model)
+        vectorstore = Qdrant(client=zajednicki_qdrant_client, collection_name=COLLECTION_NAME, embeddings=embedding_model)
+
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
     llm = ChatGroq(api_key=api_key, model="llama-3.3-70b-versatile", temperature=0.2)
     
-    # 🎯 STABILAN PROMPT: Kombinuje kontekst iz baze i istoriju poruka
     prompt = ChatPromptTemplate.from_messages([
         ("system", "Ti si koristan asistent. Odgovori na pitanje korisnika koristeći priloženi kontekst (ukoliko je relevantan za pitanje).\n\nKontekst iz dokumenata:\n{context}"),
         MessagesPlaceholder(variable_name="history"),
         ("human", "{question}")
     ])
     
-    # Lanac koji prima čist rečnik sa gotovim 'context' i 'question' stringovima
     osnovni_rag_chain = prompt | llm | StrOutputParser()
     
-    # Povezujemo sa istorijom razgovora
     rag_chain = RunnableWithMessageHistory(
         osnovni_rag_chain,
         get_session_history,
         input_messages_key="question",
         history_messages_key="history"
     )
-    print("✅ RAG pipeline sa MEMORIJOM je uspešno konfigurisan!")
+    print("✅ RAG pipeline sa TRAJNOM MEMORIJOM u Qdrant-u je uspešno konfigurisan!")
 
 # ==========================================
-# 3. PYDANTIC MODELI SA SESSION_ID
+# 4. PYDANTIC MODELI SA SESSION_ID
 # ==========================================
 class QueryRequest(BaseModel):
     question: str
-    session_id: str = "default_session"  # 🔥 Dodat parametar za praćenje sesije
+    session_id: str = "default_session"
 
 class QueryResponse(BaseModel):
     question: str
@@ -195,27 +259,21 @@ class QueryResponse(BaseModel):
     session_id: str
 
 # ==========================================
-# 4. API ENDPOINTI
+# 5. API ENDPOINTI
 # ==========================================
 @app.get("/")
 def read_root():
-    return {"status": "ok", "message": "AI RAG Pipeline API sa Memorijom je pokrenut"}
+    return {"status": "ok", "message": "AI RAG Pipeline API sa Trajnom Memorijom je pokrenut"}
 
-# ==========================================
-# 4. API ENDPOINTI (Ažuriran sa stabilnim retriever pozivom)
-# ==========================================
 @app.post("/query", response_model=QueryResponse)
 def query_rag(request: QueryRequest):
-    if rag_chain is None or vectorstore is None:
+    if rag_chain is None or retriever is None:
         raise HTTPException(status_code=503, detail="RAG pipeline nije spreman.")
     
     try:
-        # 1. Ručno izvlačimo relevantne dokumente iz Qdranta za trenutno pitanje
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
         pronadjeni_docs = retriever.invoke(request.question)
         kontekst_str = format_docs(pronadjeni_docs)
         
-        # 2. Prosleđujemo čist string u RunnableWithMessageHistory
         answer = rag_chain.invoke(
             {
                 "question": request.question,
