@@ -33,7 +33,8 @@ load_dotenv()
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 COLLECTION_ISTORIJA = "chat_history"
-
+from fastapi.middleware.cors import CORSMiddleware
+ 
 # ==========================================
 # 1. LIFESPAN MANAGEMENT
 # ==========================================
@@ -53,6 +54,14 @@ app = FastAPI(
     description="API za RAG sa Groq, Qdrant i Trajnom Memorijom",
     version="1.2.2",
     lifespan=lifespan
+)
+
+# CORS middleware - post-`app` definition
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # Za razvojno okruženje
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ==========================================
