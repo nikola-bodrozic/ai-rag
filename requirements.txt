@@ -1,15 +1,12 @@
-﻿--extra-index-url https://download.pytorch.org/whl/cpu
-
+﻿# requirements.txt - Updated for Ollama embeddings
 fastapi==0.111.0
 uvicorn==0.30.1
 pydantic==2.7.4
-
 numpy<2.0.0
 
 langchain>=0.2,<0.3
 langchain-core>=0.2,<0.3
-langchain-huggingface>=0.0.3
-langchain-ollama>=0.0.3
+langchain-ollama>=0.0.3          # ← For BOTH embedding and LLM!
 langchain-text-splitters>=0.2,<0.3
 langchain-qdrant>=0.0.3
 langchain-community>=0.2,<0.3
@@ -17,11 +14,12 @@ langgraph>=0.0.65
 
 qdrant-client==1.9.1
 
-torch==2.3.0+cpu
-sentence-transformers==3.0.1
+# Remove these - no longer needed with Ollama embeddings
+# torch==2.3.0+cpu
+# sentence-transformers==3.0.1
+# langchain-huggingface>=0.0.3
 
 python-dotenv==1.2.2
-
 pypdf==4.2.0
 beautifulsoup4==4.12.3
 lxml==5.2.2

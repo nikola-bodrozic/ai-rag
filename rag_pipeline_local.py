@@ -3,14 +3,12 @@ import os
 import hashlib
 import json
 
-# ✅ Novi paketi
-from langchain_ollama import OllamaLLM
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_ollama import OllamaLLM, OllamaEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from qdrant_client.models import Filter, FieldCondition, MatchValue
+from qdrant_client.models import Filter, FieldCondition, MatchValue, VectorParams, Distance
 
 # ⚠️ Loaderi su još u community dok ne budu migrirani
 from langchain_community.document_loaders import TextLoader, DirectoryLoader, PyPDFLoader, UnstructuredWordDocumentLoader
@@ -41,6 +39,29 @@ def load_index():
 def save_index(index):
     with open(INDEX_FILE, "w", encoding="utf-8") as f:
         json.dump(index, f, indent=4)
+
+def ensure_collection_exists(client, collection_name, vector_size=384):
+    """Create collection if it doesn't exist"""
+    try:
+        collections = client.get_collections()
+        exists = any(c.name == collection_name for c in collections.collections)
+        
+        if not exists:
+            print(f"📦 Creating collection '{collection_name}'...")
+            client.create_collection(
+                collection_name=collection_name,
+                vectors_config=VectorParams(
+                    size=vector_size,  # nomic-embed-text uses 768 dimensions!
+                    distance=Distance.COSINE
+                )
+            )
+            print(f"✅ Collection '{collection_name}' created!")
+        else:
+            print(f"✅ Collection '{collection_name}' already exists")
+        return True
+    except Exception as e:
+        print(f"❌ Error creating collection: {e}")
+        return False
 
 def check_and_reindex(client, embedding_model):
     current_index = load_index()
@@ -74,24 +95,33 @@ def check_and_reindex(client, embedding_model):
             loaded = loader.load()
             docs.extend(splitter.split_documents(loaded))
 
-            # Brišemo stare dokumente iz kolekcije
-            
-
-            client.delete(
-                collection_name="rag_collection",
-                points_selector=Filter(
-                    must=[FieldCondition(key="source", match=MatchValue(value=path))]
+            # 🔥 FIXED: Only delete if collection exists
+            try:
+                client.delete(
+                    collection_name="rag_collection",
+                    points_selector=Filter(
+                        must=[FieldCondition(key="source", match=MatchValue(value=path))]
+                    )
                 )
+                print(f"🗑️  Deleted old documents from: {path}")
+            except Exception as e:
+                # Collection doesn't exist or no documents - that's fine!
+                print(f"ℹ️  No old documents to delete for {path}")
+
+        # 🔥 FIXED: Ensure collection exists before adding documents
+        if docs:
+            # Make sure collection exists
+            ensure_collection_exists(client, "rag_collection", vector_size=768)
+            
+            qdrant_store = Qdrant(
+                client=client,
+                collection_name="rag_collection",
+                embeddings=embedding_model
             )
-
-
-        # Dodaj nove dokumente
-        qdrant_store = Qdrant(
-            client=client,
-            collection_name="rag_collection",
-            embeddings=embedding_model
-        )
-        qdrant_store.add_documents(docs)
+            qdrant_store.add_documents(docs)
+            print(f"✅ Dodato {len(docs)} chunkova u bazu")
+        else:
+            print("⚠️ Nema dokumenata za indeksiranje")
 
         save_index(new_index)
         print("✅ Reindeksiranje završeno.")
@@ -107,11 +137,26 @@ if not os.path.exists(FOLDER_SA_DOKUMENTIMA):
     sys.exit()
 
 # ==========================================
+# 🔥 NEW: FORCE REINDEX (Delete old index file)
+# ==========================================
+if os.path.exists(INDEX_FILE):
+    os.remove(INDEX_FILE)
+    print("🗑️  Old index file removed - forcing full reindex!")
+
+# ==========================================
 # 2. VEKTORIZACIJA I QDRANT BAZA
 # ==========================================
-print("🧠 Pokretanje embedding modela i indeksiranje podataka...")
-embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+print("🧠 Pokretanje embedding modela (nomic-embed-text)...")
+embedding_model = OllamaEmbeddings(
+    model="nomic-embed-text:latest",
+    base_url="http://localhost:11434"
+)
+
+print("🔌 Povezivanje sa Qdrant bazom...")
 client = QdrantClient(url="http://localhost:6333")
+
+# 🔥 FIXED: Check and create collection if needed
+ensure_collection_exists(client, "rag_collection", vector_size=768)
 
 check_and_reindex(client, embedding_model)
 
@@ -124,6 +169,7 @@ retriever = Qdrant(
 # ==========================================
 # 3. POVEZIVANJE SA OLLAMOM
 # ==========================================
+print("🧠 Pokretanje LLM modela (gemma2:2b)...")
 llm = OllamaLLM(model="gemma2:2b")
 
 # ==========================================
@@ -152,6 +198,8 @@ rag_lanac = (
 # 5. INTERAKTIVNI RAD
 # ==========================================
 print("\n🚀 RAG sistem je spreman za tvoje fajlove!")
+print(f"🔹 Embedding model: nomic-embed-text (274 MB) - Vector size: 768")
+print(f"🔹 LLM model: gemma2:2b (1.6 GB)")
 print("Upisi 'izlaz' za kraj programa.\n")
 
 while True:
@@ -164,6 +212,9 @@ while True:
         continue
 
     print("🤖 Razmišljam...")
-    odgovor = rag_lanac.invoke(pitanje)
-    print(f"\n🤖 Odgovor:\n{odgovor}\n")
+    try:
+        odgovor = rag_lanac.invoke(pitanje)
+        print(f"\n🤖 Odgovor:\n{odgovor}\n")
+    except Exception as e:
+        print(f"❌ Greška: {e}")
     print("-" * 50)
