@@ -1,14 +1,16 @@
-# Run Docker Stack
+# Python RAG
 
 App requires Python 3.12
 
-add txt files in `dokumentacija/` folder.
+add txt, PDF files in `dokumentacija/` folder.
 
 bring up QDRANT vector base
 
 ```sh
 docker compose up
 ```
-run pythom app 
+install and run pythom app 
 
-`python .\rag_pipeline_local.py`
+create environment `python -m venv .venv`
+activate it ` .venv\Scripts\activate `
+run `python .\rag_pipeline_local.py`
