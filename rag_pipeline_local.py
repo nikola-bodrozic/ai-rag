@@ -16,7 +16,7 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue, VectorParam
 
 from langchain_community.document_loaders import TextLoader, PyPDFLoader, UnstructuredWordDocumentLoader
 from qdrant_client import QdrantClient
-from langchain_qdrant import QdrantVectorStore  # ← NEW: Use QdrantVectorStore instead!
+from langchain_qdrant import QdrantVectorStore
 
 # ==========================================
 # CONFIGURATION
@@ -24,6 +24,10 @@ from langchain_qdrant import QdrantVectorStore  # ← NEW: Use QdrantVectorStore
 FOLDER_SA_DOKUMENTIMA = "./dokumentacija"
 INDEX_FILE = "indexed_files.json"
 COLLECTION_NAME = "rag_collection"
+
+# MODELI - definisani kao varijable na vrhu fajla
+EMBEDDING_MODEL_NAME = "nomic-embed-text:latest"
+LLM_MODEL_NAME = "gemma2:2b"
 
 # ==========================================
 # 0. MD5 UTIL FUNKCIJE
@@ -118,7 +122,7 @@ def check_and_reindex(client, embedding_model):
             qdrant_store = QdrantVectorStore(
                 client=client,
                 collection_name=COLLECTION_NAME,
-                embedding=embedding_model  # Note: parameter is 'embedding' not 'embeddings'
+                embedding=embedding_model
             )
             qdrant_store.add_documents(docs)
             print(f"✅ Dodato {len(docs)} chunkova u bazu")
@@ -141,9 +145,9 @@ if not os.path.exists(FOLDER_SA_DOKUMENTIMA):
 # ==========================================
 # 2. VEKTORIZACIJA - LOCAL OLLAMA
 # ==========================================
-print("🧠 Pokretanje embedding modela (nomic-embed-text - LOCAL)...")
+print(f"🧠 Pokretanje embedding modela ({EMBEDDING_MODEL_NAME} - LOCAL)...")
 embedding_model = OllamaEmbeddings(
-    model="nomic-embed-text:latest",
+    model=EMBEDDING_MODEL_NAME,
     base_url="http://localhost:11434"
 )
 
@@ -167,8 +171,8 @@ retriever = vector_store.as_retriever(search_kwargs={"k": 3})
 # ==========================================
 # 3. LLM - LOCAL OLLAMA
 # ==========================================
-print("🧠 Pokretanje LLM modela (gemma2:2b - LOCAL)...")
-llm = OllamaLLM(model="gemma2:2b")
+print(f"🧠 Pokretanje LLM modela ({LLM_MODEL_NAME} - LOCAL)...")
+llm = OllamaLLM(model=LLM_MODEL_NAME)
 
 # ==========================================
 # 4. RAG PROMPT I LANAC
@@ -197,8 +201,8 @@ rag_lanac = (
 # ==========================================
 print("\n🚀 RAG sistem je spreman (LOKALNA verzija)!")
 print("="*50)
-print(f"🔹 Embedding model: nomic-embed-text (274 MB - LOCAL)")
-print(f"🔹 LLM model: gemma2:2b (1.6 GB - LOCAL)")
+print(f"🔹 Embedding model: {EMBEDDING_MODEL_NAME} (274 MB - LOCAL)")
+print(f"🔹 LLM model: {LLM_MODEL_NAME} (1.6 GB - LOCAL)")
 print(f"🔹 Kolekcija: {COLLECTION_NAME}")
 print("="*50)
 print("Upisi 'izlaz' za kraj programa.\n")

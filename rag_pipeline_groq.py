@@ -38,6 +38,10 @@ FOLDER_SA_DOKUMENTIMA = "./dokumentacija"
 INDEX_FILE = "indexed_files_groq.json"
 COLLECTION_NAME = "rag_collection_groq"
 
+# MODELI - definisani kao varijable na vrhu fajla
+EMBEDDING_MODEL_NAME = "nomic-embed-text:latest"
+LLM_MODEL_NAME = "llama-3.3-70b-versatile"
+
 # ==========================================
 # 0. MD5 UTIL FUNKCIJE
 # ==========================================
@@ -153,9 +157,9 @@ if not os.path.exists(FOLDER_SA_DOKUMENTIMA):
 # ==========================================
 # 2. VEKTORIZACIJA - LOCAL OLLAMA
 # ==========================================
-print("🧠 Pokretanje embedding modela (nomic-embed-text - LOCAL)...")
+print(f"🧠 Pokretanje embedding modela ({EMBEDDING_MODEL_NAME} - LOCAL)...")
 embedding_model = OllamaEmbeddings(
-    model="nomic-embed-text:latest",
+    model=EMBEDDING_MODEL_NAME,
     base_url="http://localhost:11434"
 )
 
@@ -181,15 +185,14 @@ retriever = vector_store.as_retriever(search_kwargs={"k": 3})
 print("\n" + "="*50)
 print("🤖 KORISTI SE GROQ API (CLOUD LLM)")
 print("="*50)
-
 llm = ChatGroq(
     temperature=0.7,
     groq_api_key=GROQ_API_KEY,
-    model_name="llama-3.3-70b-versatile",  # Recommended replacement!
+    model_name=LLM_MODEL_NAME,
     max_tokens=1024,
 )
 
-print(f"📊 Model: mixtral-8x7b-32768")
+print(f"📊 Model: {LLM_MODEL_NAME}")
 print(f"🌐 Tip: Cloud API (Internet required)")
 print(f"💰 Trošak: Besplatno (trenutno)")
 print(f"⚡ Brzina: Vrlo brzo (hardverski optimizovano)")
@@ -222,8 +225,8 @@ rag_lanac = (
 # ==========================================
 print("\n🚀 RAG sistem je spreman (GROQ verzija)!")
 print("="*50)
-print(f"🔹 Embedding model: nomic-embed-text (274 MB - LOCAL)")
-print(f"🔹 LLM model: mixtral-8x7b-32768 (GROQ - CLOUD)")
+print(f"🔹 Embedding model: {EMBEDDING_MODEL_NAME} (274 MB - LOCAL)")
+print(f"🔹 LLM model: {LLM_MODEL_NAME} (GROQ - CLOUD)")
 print(f"🔹 Kolekcija: {COLLECTION_NAME}")
 print(f"🔹 API Key: {'✅ Pronađen' if GROQ_API_KEY else '❌ Nije pronađen'}")
 print("="*50)
