@@ -5,3 +5,4 @@ ScanFiles.ps1
 RepositoryContents.txt
 dokumentacija/
 indexed_files.json
+indexed_files_groq.json

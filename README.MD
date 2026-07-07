@@ -13,4 +13,5 @@ install and run pythom app
 
 create environment `python -m venv .venv`
 activate it ` .venv\Scripts\activate `
-run `python .\rag_pipeline_local.py`
+install deps. `pip install -r requirements.txt --no-build-isolation`
+run `python .\rag_pipeline_local.py` and `python .\rag_pipeline_groq.py`

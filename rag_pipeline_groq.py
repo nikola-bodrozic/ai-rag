@@ -1,29 +1,42 @@
-﻿import sys
+import sys
 import os
 import hashlib
 import json
 from dotenv import load_dotenv
 
 # ==========================================
-# IMPORTS - Updated for new API
+# LOAD ENVIRONMENT VARIABLES
 # ==========================================
-from langchain_ollama import OllamaLLM, OllamaEmbeddings
+load_dotenv()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+if not GROQ_API_KEY:
+    print("❌ GROQ_API_KEY not found in .env file!")
+    print("Please add: GROQ_API_KEY=your_api_key_here")
+    sys.exit(1)
+
+# ==========================================
+# IMPORTS - Using standalone GROQ package
+# ==========================================
+from langchain_ollama import OllamaEmbeddings
+from langchain_groq import ChatGroq  # ← NEW: standalone package!
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client.models import Filter, FieldCondition, MatchValue, VectorParams, Distance
 
+# Document loaders - still needed for PDF, etc.
 from langchain_community.document_loaders import TextLoader, PyPDFLoader, UnstructuredWordDocumentLoader
 from qdrant_client import QdrantClient
-from langchain_qdrant import QdrantVectorStore  # ← NEW: Use QdrantVectorStore instead!
+from langchain_qdrant import QdrantVectorStore
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
 FOLDER_SA_DOKUMENTIMA = "./dokumentacija"
-INDEX_FILE = "indexed_files.json"
-COLLECTION_NAME = "rag_collection"
+INDEX_FILE = "indexed_files_groq.json"
+COLLECTION_NAME = "rag_collection_groq"
 
 # ==========================================
 # 0. MD5 UTIL FUNKCIJE
@@ -114,11 +127,10 @@ def check_and_reindex(client, embedding_model):
         if docs:
             ensure_collection_exists(client, COLLECTION_NAME, vector_size=768)
             
-            # ✅ NEW: Use QdrantVectorStore
             qdrant_store = QdrantVectorStore(
                 client=client,
                 collection_name=COLLECTION_NAME,
-                embedding=embedding_model  # Note: parameter is 'embedding' not 'embeddings'
+                embedding=embedding_model
             )
             qdrant_store.add_documents(docs)
             print(f"✅ Dodato {len(docs)} chunkova u bazu")
@@ -156,7 +168,6 @@ if os.path.exists(INDEX_FILE):
 
 check_and_reindex(client, embedding_model)
 
-# ✅ NEW: Create retriever using QdrantVectorStore
 vector_store = QdrantVectorStore(
     client=client,
     collection_name=COLLECTION_NAME,
@@ -165,10 +176,24 @@ vector_store = QdrantVectorStore(
 retriever = vector_store.as_retriever(search_kwargs={"k": 3})
 
 # ==========================================
-# 3. LLM - LOCAL OLLAMA
+# 3. LLM - GROQ API (CLOUD)
 # ==========================================
-print("🧠 Pokretanje LLM modela (gemma2:2b - LOCAL)...")
-llm = OllamaLLM(model="gemma2:2b")
+print("\n" + "="*50)
+print("🤖 KORISTI SE GROQ API (CLOUD LLM)")
+print("="*50)
+
+llm = ChatGroq(
+    temperature=0.7,
+    groq_api_key=GROQ_API_KEY,
+    model_name="llama-3.3-70b-versatile",  # Recommended replacement!
+    max_tokens=1024,
+)
+
+print(f"📊 Model: mixtral-8x7b-32768")
+print(f"🌐 Tip: Cloud API (Internet required)")
+print(f"💰 Trošak: Besplatno (trenutno)")
+print(f"⚡ Brzina: Vrlo brzo (hardverski optimizovano)")
+print("="*50 + "\n")
 
 # ==========================================
 # 4. RAG PROMPT I LANAC
@@ -195,12 +220,14 @@ rag_lanac = (
 # ==========================================
 # 5. INTERAKTIVNI RAD
 # ==========================================
-print("\n🚀 RAG sistem je spreman (LOKALNA verzija)!")
+print("\n🚀 RAG sistem je spreman (GROQ verzija)!")
 print("="*50)
 print(f"🔹 Embedding model: nomic-embed-text (274 MB - LOCAL)")
-print(f"🔹 LLM model: gemma2:2b (1.6 GB - LOCAL)")
+print(f"🔹 LLM model: mixtral-8x7b-32768 (GROQ - CLOUD)")
 print(f"🔹 Kolekcija: {COLLECTION_NAME}")
+print(f"🔹 API Key: {'✅ Pronađen' if GROQ_API_KEY else '❌ Nije pronađen'}")
 print("="*50)
+print("💡 Savet: Poredi odgovore sa lokalnom (Ollama) verzijom!")
 print("Upisi 'izlaz' za kraj programa.\n")
 
 while True:
@@ -212,10 +239,10 @@ while True:
     if not pitanje.strip():
         continue
 
-    print("🤖 Razmišljam (lokalno)...")
+    print("🤖 Razmišljam (GROQ cloud)...")
     try:
         odgovor = rag_lanac.invoke(pitanje)
-        print(f"\n🤖 Odgovor:\n{odgovor}\n")
+        print(f"\n🤖 Odgovor (GROQ):\n{odgovor}\n")
     except Exception as e:
         print(f"❌ Greška: {e}")
     print("-" * 50)
