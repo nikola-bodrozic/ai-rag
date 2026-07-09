@@ -2,7 +2,6 @@
 import os
 import hashlib
 import json
-from typing import List, Tuple
 
 from langchain_ollama import OllamaLLM, OllamaEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
@@ -87,44 +86,41 @@ def check_and_reindex(client, embedding_model):
         splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
 
         for path in changed_files:
-            try:
-                if path.endswith(".txt") or path.endswith(".md"):
-                    loader = TextLoader(path, encoding="utf-8")
-                elif path.endswith(".pdf"):
-                    loader = PyPDFLoader(path)
-                elif path.endswith(".docx"):
-                    loader = UnstructuredWordDocumentLoader(path)
-                else:
-                    print(f"⚠️ Skipping unsupported file: {path}")
-                    continue
-
-                loaded = loader.load()
-                docs.extend(splitter.split_documents(loaded))
-
-                try:
-                    client.delete(
-                        collection_name=COLLECTION_NAME,
-                        points_selector=Filter(
-                            must=[FieldCondition(key="source", match=MatchValue(value=path))]
-                        )
-                    )
-                    print(f"🗑️  Deleted old documents from: {path}")
-                except Exception as e:
-                    print(f"ℹ️  No old documents to delete for {path}")
-            except Exception as e:
-                print(f"❌ Error processing {path}: {e}")
+            if path.endswith(".txt") or path.endswith(".md"):
+                loader = TextLoader(path, encoding="utf-8")
+            elif path.endswith(".pdf"):
+                loader = PyPDFLoader(path)
+            elif path.endswith(".docx"):
+                loader = UnstructuredWordDocumentLoader(path)
+            else:
+                print(f"⚠️ Skipping unsupported file: {path}")
                 continue
+
+            loaded = loader.load()
+            docs.extend(splitter.split_documents(loaded))
+
+            try:
+                client.delete(
+                    collection_name=COLLECTION_NAME,
+                    points_selector=Filter(
+                        must=[FieldCondition(key="source", match=MatchValue(value=path))]
+                    )
+                )
+                print(f"🗑️  Deleted old documents from: {path}")
+            except Exception as e:
+                print(f"ℹ️  No old documents to delete for {path}")
 
         if docs:
             ensure_collection_exists(client, COLLECTION_NAME, vector_size=768)
             
+            # ✅ NEW: Use QdrantVectorStore
             qdrant_store = QdrantVectorStore(
                 client=client,
                 collection_name=COLLECTION_NAME,
                 embedding=embedding_model
             )
             qdrant_store.add_documents(docs)
-            print(f"✅ {len(docs)} chunks added to database")
+            print(f"✅ {len(docs)} chunks is added in database")
         else:
             print("⚠️ No documents for indexing")
 
@@ -160,7 +156,7 @@ if os.path.exists(INDEX_FILE):
 
 check_and_reindex(client, embedding_model)
 
-# Create vector store and retriever
+# ✅ NEW: Create retriever using QdrantVectorStore
 vector_store = QdrantVectorStore(
     client=client,
     collection_name=COLLECTION_NAME,
@@ -175,218 +171,62 @@ print(f"🧠 Starting LLM model ({LLM_MODEL_NAME} - LOCAL)...")
 llm = OllamaLLM(model=LLM_MODEL_NAME)
 
 # ==========================================
-# 4. CHAT MEMORY IMPLEMENTATION (PURE PYTHON - NO LANGCHAIN)
+# 4. RAG PROMPT & CHAIN
 # ==========================================
+system_prompt = (
+    "You are a helpful assistant. Answer the question exclusively using the provided context below.\n"
+    "If the answer is not in the context, say 'I don't know the answer to that question based on internal documents.'\n"
+    "When answering, be specific and include relevant details, dates, or requirements from the context.\n\n"
+    "Context:\n{context}\n\n"
+    "Question: {question}\n\n"
+    "Answer:"
+)
 
-class ChatMemory:
-    """Simple RAM-based chat memory - no LangChain dependencies"""
-    def __init__(self, max_history: int = 10):
-        self.history: List[Tuple[str, str]] = []  # List of (question, answer)
-        self.max_history = max_history
-    
-    def add_interaction(self, question: str, answer: str):
-        """Add a new interaction to memory"""
-        self.history.append((question, answer))
-        # Keep only last N interactions
-        if len(self.history) > self.max_history:
-            self.history = self.history[-self.max_history:]
-    
-    def get_context(self) -> str:
-        """Format history as context string"""
-        if not self.history:
-            return ""
-        
-        context_lines = ["Previous conversation:"]
-        for i, (q, a) in enumerate(self.history, 1):
-            context_lines.append(f"Q{i}: {q}")
-            context_lines.append(f"A{i}: {a}")
-        return "\n".join(context_lines)
-    
-    def clear(self):
-        """Clear memory"""
-        self.history = []
-    
-    def get_last_n(self, n: int) -> str:
-        """Get last N interactions"""
-        if not self.history:
-            return ""
-        
-        recent = self.history[-n:] if len(self.history) > n else self.history
-        context_lines = ["Previous conversation (recent):"]
-        for i, (q, a) in enumerate(recent, 1):
-            context_lines.append(f"Q: {q}")
-            context_lines.append(f"A: {a}")
-        return "\n".join(context_lines)
+prompt = ChatPromptTemplate.from_template(system_prompt)
 
-# Initialize chat memory
-chat_memory = ChatMemory(max_history=10)
-
-# ==========================================
-# 5. RAG PROMPT WITH MEMORY
-# ==========================================
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
 
 def format_docs_with_sources(docs):
-    """Format documents with source information"""
     formatted = []
     for doc in docs:
         source = doc.metadata.get('source', 'Unknown')
-        # Get page number if available
-        page = doc.metadata.get('page', '')
-        if page:
-            source = f"{source} (page {page})"
         formatted.append(f"[Source: {source}]\n{doc.page_content}")
     return "\n\n".join(formatted)
 
-def create_rag_chain_with_memory(retriever, llm, chat_memory):
-    """Create RAG chain with memory integration"""
-    
-    # Enhanced prompt with memory awareness
-    system_prompt = (
-        "You are a helpful assistant with access to previous conversations and document context.\n"
-        "Follow these guidelines:\n"
-        "1. Answer based on the provided relevant documents whenever possible.\n"
-        "2. Use the conversation history to maintain context and answer follow-up questions.\n"
-        "3. If the answer is not in the documents, say 'I don't know based on the available documents.'\n"
-        "4. Be specific and include relevant details, dates, or requirements from the context.\n"
-        "5. When referencing previous questions, use the conversation history.\n\n"
-        "Conversation History:\n{chat_history}\n\n"
-        "Relevant Documents:\n{docs_context}\n\n"
-        "Current Question: {question}\n\n"
-        "Answer:"
-    )
-    
-    prompt = ChatPromptTemplate.from_template(system_prompt)
-    
-    # Create the chain with memory
-    def prepare_inputs(question):
-        """Prepare all inputs for the chain"""
-        # Get chat history
-        chat_history = chat_memory.get_context()
-        
-        # Get relevant documents
-        docs = retriever.invoke(question)
-        docs_context = format_docs_with_sources(docs) if docs else "No relevant documents found."
-        
-        return {
-            "question": question,
-            "chat_history": chat_history or "No previous conversation.",
-            "docs_context": docs_context
-        }
-    
-    # Create the chain
-    rag_chain = (
-        RunnablePassthrough() | prepare_inputs
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
-    
-    return rag_chain
-
-# Create the chain with memory
-rag_chain = create_rag_chain_with_memory(retriever, llm, chat_memory)
+# Then use this in your chain
+rag_chain = (
+    {"context": retriever | format_docs_with_sources, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
 
 # ==========================================
-# 6. INFERENCE WITH MEMORY
+# 5. INFERENCE
 # ==========================================
-
-print("\n🚀 RAG system with chat memory is ready!")
+print("\n🚀 RAG system is ready (LOCAL version)!")
 print("="*50)
 print(f"🔹 Embedding model: {EMBEDDING_MODEL_NAME}")
 print(f"🔹 LLM model: {LLM_MODEL_NAME}")
 print(f"🔹 Collection: {COLLECTION_NAME}")
-print(f"🔹 Memory size: {chat_memory.max_history} interactions")
 print("="*50)
-print("Commands:")
-print("  'exit' - End the program")
-print("  'clear' - Clear conversation memory")
-print("  'history' - Show conversation history")
-print("="*50 + "\n")
+print("Type 'exit' to end the program.\n")
 
 while True:
     question = input("🙋 Ask question: ")
-    
     if question.lower() in ['izlaz', 'exit', 'quit']:
         print("Bye!")
         break
-    
-    if question.lower() == 'clear':
-        chat_memory.clear()
-        print("🗑️  Conversation memory cleared!\n")
-        continue
-    
-    if question.lower() == 'history':
-        print("\n📜 Conversation History:")
-        print("-" * 40)
-        history = chat_memory.get_context()
-        if history:
-            print(history)
-        else:
-            print("No conversation history yet.")
-        print("-" * 40 + "\n")
-        continue
 
     if not question.strip():
         continue
 
-    print("🤖 I'm thinking... (with memory of previous conversations)")
+    print("🤖 I'm thinking...")
     try:
-        # Invoke the chain with the question
-        answer = rag_chain.invoke(question)
-        
-        if not answer or answer.strip() == "":
-            answer = "I couldn't find a relevant answer in the documents."
-        
-        # Store interaction in memory
-        chat_memory.add_interaction(question, answer)
-        
-        print(f"\n🤖 Answer:\n{answer}\n")
-        print(f"💾 Memory: {len(chat_memory.history)} stored interactions\n")
-        
+        anwser = rag_chain.invoke(question)
+        if not anwser or anwser.strip() == "":
+            anwser = "I couldn't find a relevant answer in the documents."
+        print(f"\n🤖 Answer:\n{anwser}\n")
     except Exception as e:
         print(f"❌ Error: {e}")
-
-# ==========================================
-# 7. OPTIONAL: Persistent Memory (save to disk)
-# ==========================================
-
-class PersistentChatMemory(ChatMemory):
-    """Chat memory with disk persistence"""
-    
-    def __init__(self, memory_file="chat_memory.json", max_history=10):
-        super().__init__(max_history)
-        self.memory_file = memory_file
-        self.load_memory()
-    
-    def save_memory(self):
-        """Save memory to disk"""
-        try:
-            data = [{"question": q, "answer": a} for q, a in self.history]
-            with open(self.memory_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4, ensure_ascii=False)
-        except Exception as e:
-            print(f"⚠️ Could not save memory: {e}")
-    
-    def load_memory(self):
-        """Load memory from disk"""
-        try:
-            if os.path.exists(self.memory_file):
-                with open(self.memory_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.history = [(item["question"], item["answer"]) for item in data]
-                    # Trim if too long
-                    if len(self.history) > self.max_history:
-                        self.history = self.history[-self.max_history:]
-        except Exception as e:
-            print(f"⚠️ Could not load memory: {e}")
-    
-    def add_interaction(self, question: str, answer: str):
-        """Add interaction and save to disk"""
-        super().add_interaction(question, answer)
-        self.save_memory()
-    
-    def clear(self):
-        """Clear memory and remove file"""
-        super().clear()
-        if os.path.exists(self.memory_file):
-            os.remove(self.memory_file)
