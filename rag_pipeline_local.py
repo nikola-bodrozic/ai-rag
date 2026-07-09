@@ -2,35 +2,30 @@
 import os
 import hashlib
 import json
-from dotenv import load_dotenv
 
-# ==========================================
-# IMPORTS - Updated for new API
-# ==========================================
 from langchain_ollama import OllamaLLM, OllamaEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from qdrant_client.models import Filter, FieldCondition, MatchValue, VectorParams, Distance
-
 from langchain_community.document_loaders import TextLoader, PyPDFLoader, UnstructuredWordDocumentLoader
-from qdrant_client import QdrantClient
 from langchain_qdrant import QdrantVectorStore
+
+from qdrant_client.models import Filter, FieldCondition, MatchValue, VectorParams, Distance
+from qdrant_client import QdrantClient
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
-FOLDER_SA_DOKUMENTIMA = "./dokumentacija"
+DOCS_FOLDER = "./documents"
 INDEX_FILE = "indexed_files.json"
 COLLECTION_NAME = "rag_collection"
 
-# MODELI - definisani kao varijable na vrhu fajla
 EMBEDDING_MODEL_NAME = "nomic-embed-text:latest"
 LLM_MODEL_NAME = "gemma2:2b"
 
 # ==========================================
-# 0. MD5 UTIL FUNKCIJE
+# 0. MD5 UTIL FUNCTIONS
 # ==========================================
 def md5_file(path):
     hash_md5 = hashlib.md5()
@@ -77,7 +72,7 @@ def check_and_reindex(client, embedding_model):
     new_index = {}
     changed_files = []
 
-    for root, _, files in os.walk(FOLDER_SA_DOKUMENTIMA):
+    for root, _, files in os.walk(DOCS_FOLDER):
         for file in files:
             path = os.path.join(root, file)
             file_hash = md5_file(path)
@@ -86,7 +81,7 @@ def check_and_reindex(client, embedding_model):
                 changed_files.append(path)
 
     if changed_files:
-        print(f"🔄 Promenjeni fajlovi: {changed_files}")
+        print(f"🔄 Changed files: {changed_files}")
         docs = []
         splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
 
@@ -98,7 +93,7 @@ def check_and_reindex(client, embedding_model):
             elif path.endswith(".docx"):
                 loader = UnstructuredWordDocumentLoader(path)
             else:
-                print(f"⚠️ Preskačem nepodržan fajl: {path}")
+                print(f"⚠️ Skipping unsupported file: {path}")
                 continue
 
             loaded = loader.load()
@@ -125,34 +120,35 @@ def check_and_reindex(client, embedding_model):
                 embedding=embedding_model
             )
             qdrant_store.add_documents(docs)
-            print(f"✅ Dodato {len(docs)} chunkova u bazu")
+            print(f"✅ {len(docs)} chunks is added in database")
         else:
-            print("⚠️ Nema dokumenata za indeksiranje")
+            print("⚠️ No documents for indexing")
 
         save_index(new_index)
-        print("✅ Reindeksiranje završeno.")
+        print("✅ Reindexing is finished.")
     else:
-        print("✅ Nema promena u fajlovima.")
+        print("✅ No changes in files.")
 
 # ==========================================
 # 1. PROVERA FOLDERA
 # ==========================================
-if not os.path.exists(FOLDER_SA_DOKUMENTIMA):
-    os.makedirs(FOLDER_SA_DOKUMENTIMA)
-    print(f"📁 Napravljen je folder '{FOLDER_SA_DOKUMENTIMA}'. Ubaci fajlove pa pokreni skriptu ponovo!")
+if not os.path.exists(DOCS_FOLDER):
+    os.makedirs(DOCS_FOLDER)
+    print(f"📁 Created folder '{DOCS_FOLDER}'. Add files and run the script again!")
     sys.exit()
 
 # ==========================================
-# 2. VEKTORIZACIJA - LOCAL OLLAMA
+# 2. EMBEDDINGS - LOCAL OLLAMA
 # ==========================================
-print(f"🧠 Pokretanje embedding modela ({EMBEDDING_MODEL_NAME} - LOCAL)...")
+print(f"🧠 Starting embedding model ({EMBEDDING_MODEL_NAME} - LOCAL)...")
 embedding_model = OllamaEmbeddings(
     model=EMBEDDING_MODEL_NAME,
     base_url="http://localhost:11434"
 )
 
-print("🔌 Povezivanje sa Qdrant bazom...")
+print("🔌 Connecting to the Qdrant database...")
 client = QdrantClient(url="http://localhost:6333")
+ensure_collection_exists(client, COLLECTION_NAME, vector_size=768)
 
 if os.path.exists(INDEX_FILE):
     os.remove(INDEX_FILE)
@@ -166,60 +162,71 @@ vector_store = QdrantVectorStore(
     collection_name=COLLECTION_NAME,
     embedding=embedding_model
 )
-retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+retriever = vector_store.as_retriever(search_kwargs={"k": 5})
 
 # ==========================================
 # 3. LLM - LOCAL OLLAMA
 # ==========================================
-print(f"🧠 Pokretanje LLM modela ({LLM_MODEL_NAME} - LOCAL)...")
+print(f"🧠 Starting LLM model ({LLM_MODEL_NAME} - LOCAL)...")
 llm = OllamaLLM(model=LLM_MODEL_NAME)
 
 # ==========================================
-# 4. RAG PROMPT I LANAC
+# 4. RAG PROMPT & CHAIN
 # ==========================================
-sistemski_prompt = (
-    "Ti si koristan asistent. Odgovori na pitanje isključivo koristeći priloženi kontekst ispod.\n"
-    "Ako u kontekstu nema odgovora, reci 'Ne znam odgovor na to pitanje na osnovu internih dokumenata.'\n\n"
-    "Kontekst:\n{context}\n\n"
-    "Pitanje: {question}"
+system_prompt = (
+    "You are a helpful assistant. Answer the question exclusively using the provided context below.\n"
+    "If the answer is not in the context, say 'I don't know the answer to that question based on internal documents.'\n"
+    "When answering, be specific and include relevant details, dates, or requirements from the context.\n\n"
+    "Context:\n{context}\n\n"
+    "Question: {question}\n\n"
+    "Answer:"
 )
 
-prompt = ChatPromptTemplate.from_template(sistemski_prompt)
+prompt = ChatPromptTemplate.from_template(system_prompt)
 
 def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
-rag_lanac = (
-    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+def format_docs_with_sources(docs):
+    formatted = []
+    for doc in docs:
+        source = doc.metadata.get('source', 'Unknown')
+        formatted.append(f"[Source: {source}]\n{doc.page_content}")
+    return "\n\n".join(formatted)
+
+# Then use this in your chain
+rag_chain = (
+    {"context": retriever | format_docs_with_sources, "question": RunnablePassthrough()}
     | prompt
     | llm
     | StrOutputParser()
 )
 
 # ==========================================
-# 5. INTERAKTIVNI RAD
+# 5. INFERENCE
 # ==========================================
-print("\n🚀 RAG sistem je spreman (LOKALNA verzija)!")
+print("\n🚀 RAG system is ready (LOCAL version)!")
 print("="*50)
-print(f"🔹 Embedding model: {EMBEDDING_MODEL_NAME} (274 MB - LOCAL)")
-print(f"🔹 LLM model: {LLM_MODEL_NAME} (1.6 GB - LOCAL)")
-print(f"🔹 Kolekcija: {COLLECTION_NAME}")
+print(f"🔹 Embedding model: {EMBEDDING_MODEL_NAME}")
+print(f"🔹 LLM model: {LLM_MODEL_NAME}")
+print(f"🔹 Collection: {COLLECTION_NAME}")
 print("="*50)
-print("Upisi 'izlaz' za kraj programa.\n")
+print("Type 'exit' to end the program.\n")
 
 while True:
-    pitanje = input("🙋 Postavi pitanje: ")
-    if pitanje.lower() in ['izlaz', 'exit', 'quit']:
-        print("Doviđenja!")
+    question = input("🙋 Ask question: ")
+    if question.lower() in ['izlaz', 'exit', 'quit']:
+        print("Bye!")
         break
 
-    if not pitanje.strip():
+    if not question.strip():
         continue
 
-    print("🤖 Razmišljam (lokalno)...")
+    print("🤖 I'm thinking...")
     try:
-        odgovor = rag_lanac.invoke(pitanje)
-        print(f"\n🤖 Odgovor:\n{odgovor}\n")
+        odgovor = rag_chain.invoke(question)
+        if not odgovor or odgovor.strip() == "":
+            odgovor = "I couldn't find a relevant answer in the documents."
+        print(f"\n🤖 Answer:\n{odgovor}\n")
     except Exception as e:
-        print(f"❌ Greška: {e}")
-    print("-" * 50)
+        print(f"❌ Error: {e}")

@@ -3,6 +3,6 @@
 pip_temp/
 ScanFiles.ps1
 RepositoryContents.txt
-dokumentacija/
+documents/
 indexed_files.json
 indexed_files_groq.json
