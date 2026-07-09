@@ -16,7 +16,7 @@ if not GROQ_API_KEY:
     sys.exit(1)
 
 # ==========================================
-# IMPORTS - Using standalone GROQ package
+# IMPORTS
 # ==========================================
 from langchain_ollama import OllamaEmbeddings
 from langchain_groq import ChatGroq  # ← NEW: standalone package!
@@ -34,16 +34,15 @@ from langchain_qdrant import QdrantVectorStore
 # ==========================================
 # CONFIGURATION
 # ==========================================
-FOLDER_SA_DOKUMENTIMA = "./dokumentacija"
+DOCS_FOLDER = "./documents"
 INDEX_FILE = "indexed_files_groq.json"
 COLLECTION_NAME = "rag_collection_groq"
 
-# MODELI - definisani kao varijable na vrhu fajla
 EMBEDDING_MODEL_NAME = "nomic-embed-text:latest"
 LLM_MODEL_NAME = "llama-3.3-70b-versatile"
 
 # ==========================================
-# 0. MD5 UTIL FUNKCIJE
+# 0. MD5 UTIL FUNCTIONS
 # ==========================================
 def md5_file(path):
     hash_md5 = hashlib.md5()
@@ -90,7 +89,7 @@ def check_and_reindex(client, embedding_model):
     new_index = {}
     changed_files = []
 
-    for root, _, files in os.walk(FOLDER_SA_DOKUMENTIMA):
+    for root, _, files in os.walk(DOCS_FOLDER):
         for file in files:
             path = os.path.join(root, file)
             file_hash = md5_file(path)
@@ -99,7 +98,7 @@ def check_and_reindex(client, embedding_model):
                 changed_files.append(path)
 
     if changed_files:
-        print(f"🔄 Promenjeni fajlovi: {changed_files}")
+        print(f"🔄 Changed files: {changed_files}")
         docs = []
         splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
 
@@ -111,7 +110,7 @@ def check_and_reindex(client, embedding_model):
             elif path.endswith(".docx"):
                 loader = UnstructuredWordDocumentLoader(path)
             else:
-                print(f"⚠️ Preskačem nepodržan fajl: {path}")
+                print(f"⚠️ Skipping unsupported file: {path}")
                 continue
 
             loaded = loader.load()
@@ -137,33 +136,33 @@ def check_and_reindex(client, embedding_model):
                 embedding=embedding_model
             )
             qdrant_store.add_documents(docs)
-            print(f"✅ Dodato {len(docs)} chunkova u bazu")
+            print(f"✅ {len(docs)} chunks added to database")
         else:
-            print("⚠️ Nema dokumenata za indeksiranje")
+            print("⚠️ No documents for indexing")
 
         save_index(new_index)
-        print("✅ Reindeksiranje završeno.")
+        print("✅ Reindexing is finished.")
     else:
-        print("✅ Nema promena u fajlovima.")
+        print("✅ Files didn't change.")
 
 # ==========================================
 # 1. PROVERA FOLDERA
 # ==========================================
-if not os.path.exists(FOLDER_SA_DOKUMENTIMA):
-    os.makedirs(FOLDER_SA_DOKUMENTIMA)
-    print(f"📁 Napravljen je folder '{FOLDER_SA_DOKUMENTIMA}'. Ubaci fajlove pa pokreni skriptu ponovo!")
+if not os.path.exists(DOCS_FOLDER):
+    os.makedirs(DOCS_FOLDER)
+    print(f"📁 Folder is created '{DOCS_FOLDER}'. Copy files and rerun the script")
     sys.exit()
 
 # ==========================================
 # 2. VEKTORIZACIJA - LOCAL OLLAMA
 # ==========================================
-print(f"🧠 Pokretanje embedding modela ({EMBEDDING_MODEL_NAME} - LOCAL)...")
+print(f"🧠 Starting embedding model ({EMBEDDING_MODEL_NAME} - LOCAL)...")
 embedding_model = OllamaEmbeddings(
     model=EMBEDDING_MODEL_NAME,
     base_url="http://localhost:11434"
 )
 
-print("🔌 Povezivanje sa Qdrant bazom...")
+print("🔌 Connecting with Qdrant data base...")
 client = QdrantClient(url="http://localhost:6333")
 
 if os.path.exists(INDEX_FILE):
@@ -183,7 +182,7 @@ retriever = vector_store.as_retriever(search_kwargs={"k": 3})
 # 3. LLM - GROQ API (CLOUD)
 # ==========================================
 print("\n" + "="*50)
-print("🤖 KORISTI SE GROQ API (CLOUD LLM)")
+print("🤖 GROQ API (CLOUD LLM)")
 print("="*50)
 llm = ChatGroq(
     temperature=0.7,
@@ -193,27 +192,27 @@ llm = ChatGroq(
 )
 
 print(f"📊 Model: {LLM_MODEL_NAME}")
-print(f"🌐 Tip: Cloud API (Internet required)")
-print(f"💰 Trošak: Besplatno (trenutno)")
-print(f"⚡ Brzina: Vrlo brzo (hardverski optimizovano)")
+print(f"🌐 Type: Cloud API (Internet required)")
+print(f"💰 Cost: Free (currently)")
+print(f"⚡ Speed: Very fast (hardware-optimized)")
 print("="*50 + "\n")
 
 # ==========================================
 # 4. RAG PROMPT I LANAC
 # ==========================================
-sistemski_prompt = (
-    "Ti si koristan asistent. Odgovori na pitanje isključivo koristeći priloženi kontekst ispod.\n"
-    "Ako u kontekstu nema odgovora, reci 'Ne znam odgovor na to pitanje na osnovu internih dokumenata.'\n\n"
-    "Kontekst:\n{context}\n\n"
-    "Pitanje: {question}"
+system_prompt = (
+    "You are a helpful assistant. Answer the question exclusively using the provided context below.\n"
+    "If the answer is not in the context, say 'I don't know the answer to that question based on internal documents.'\n\n"
+    "Context:\n{context}\n\n"
+    "Question: {question}"
 )
 
-prompt = ChatPromptTemplate.from_template(sistemski_prompt)
+prompt = ChatPromptTemplate.from_template(system_prompt)
 
 def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
-rag_lanac = (
+rag_chain = (
     {"context": retriever | format_docs, "question": RunnablePassthrough()}
     | prompt
     | llm
@@ -223,29 +222,28 @@ rag_lanac = (
 # ==========================================
 # 5. INTERAKTIVNI RAD
 # ==========================================
-print("\n🚀 RAG sistem je spreman (GROQ verzija)!")
+print("\n🚀 RAG system is ready (GROQ version)!")
 print("="*50)
-print(f"🔹 Embedding model: {EMBEDDING_MODEL_NAME} (274 MB - LOCAL)")
+print(f"🔹 Embedding model: {EMBEDDING_MODEL_NAME}")
 print(f"🔹 LLM model: {LLM_MODEL_NAME} (GROQ - CLOUD)")
-print(f"🔹 Kolekcija: {COLLECTION_NAME}")
-print(f"🔹 API Key: {'✅ Pronađen' if GROQ_API_KEY else '❌ Nije pronađen'}")
+print(f"🔹 Collection: {COLLECTION_NAME}")
+print(f"🔹 API Key: {'✅ Found' if GROQ_API_KEY else '❌ Not found'}")
 print("="*50)
-print("💡 Savet: Poredi odgovore sa lokalnom (Ollama) verzijom!")
-print("Upisi 'izlaz' za kraj programa.\n")
+print("Type 'exit' to end.\n")
 
 while True:
-    pitanje = input("🙋 Postavi pitanje: ")
-    if pitanje.lower() in ['izlaz', 'exit', 'quit']:
-        print("Doviđenja!")
+    question = input("🙋 Ask question: ")
+    if question.lower() in ['izlaz', 'exit', 'quit']:
+        print("Bye!")
         break
 
-    if not pitanje.strip():
+    if not question.strip():
         continue
 
-    print("🤖 Razmišljam (GROQ cloud)...")
+    print("🤖 I'm thinking (GROQ cloud)...")
     try:
-        odgovor = rag_lanac.invoke(pitanje)
-        print(f"\n🤖 Odgovor (GROQ):\n{odgovor}\n")
+        anwser = rag_chain.invoke(question)
+        print(f"\n🤖 Anwser (GROQ):\n{anwser}\n")
     except Exception as e:
-        print(f"❌ Greška: {e}")
+        print(f"❌ Error: {e}")
     print("-" * 50)
