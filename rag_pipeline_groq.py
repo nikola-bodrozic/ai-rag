@@ -146,7 +146,7 @@ def check_and_reindex(client, embedding_model):
         print("✅ Files didn't change.")
 
 # ==========================================
-# 1. PROVERA FOLDERA
+# 1. DOES FOLDER EXIST
 # ==========================================
 if not os.path.exists(DOCS_FOLDER):
     os.makedirs(DOCS_FOLDER)
@@ -154,7 +154,7 @@ if not os.path.exists(DOCS_FOLDER):
     sys.exit()
 
 # ==========================================
-# 2. VEKTORIZACIJA - LOCAL OLLAMA
+# 2. CREATING EMBEDDINGS
 # ==========================================
 print(f"🧠 Starting embedding model ({EMBEDDING_MODEL_NAME} - LOCAL)...")
 embedding_model = OllamaEmbeddings(
@@ -198,7 +198,7 @@ print(f"⚡ Speed: Very fast (hardware-optimized)")
 print("="*50 + "\n")
 
 # ==========================================
-# 4. RAG PROMPT I LANAC
+# 4. RAG PROMPT & CHAIN
 # ==========================================
 system_prompt = (
     "You are a helpful assistant. Answer the question exclusively using the provided context below.\n"
@@ -219,9 +219,6 @@ rag_chain = (
     | StrOutputParser()
 )
 
-# ==========================================
-# 5. INTERAKTIVNI RAD
-# ==========================================
 print("\n🚀 RAG system is ready (GROQ version)!")
 print("="*50)
 print(f"🔹 Embedding model: {EMBEDDING_MODEL_NAME}")
