@@ -224,9 +224,9 @@ while True:
 
     print("🤖 I'm thinking...")
     try:
-        odgovor = rag_chain.invoke(question)
-        if not odgovor or odgovor.strip() == "":
-            odgovor = "I couldn't find a relevant answer in the documents."
-        print(f"\n🤖 Answer:\n{odgovor}\n")
+        anwser = rag_chain.invoke(question)
+        if not anwser or anwser.strip() == "":
+            anwser = "I couldn't find a relevant answer in the documents."
+        print(f"\n🤖 Answer:\n{anwser}\n")
     except Exception as e:
         print(f"❌ Error: {e}")
