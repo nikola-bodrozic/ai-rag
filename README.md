@@ -17,7 +17,7 @@ nomic-embed-text:latest    0a109f422b47    274 MB    3 days ago
 gemma2:2b                  8ccf136fdd52    1.6 GB    13 days ago  
 ```
 
-bring up QDRANT vector base
+bring up Qdrant vector base
 
 ```sh
 docker compose up

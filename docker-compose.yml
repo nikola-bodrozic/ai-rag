@@ -1,14 +1,13 @@
 services:
-  # --- PHOENIX / QDRANT VEKTORSKA BAZA ---
   qdrant:
     image: qdrant/qdrant:latest
     container_name: qdrant_vector_db
     ports:
-      - "6333:6333"  # Glavni API port za komunikaciju sa Pythonom
-      - "6334:6334"  # gRPC port (za ultra brzu pretragu)
+      - "6333:6333"
+      - "6334:6334"
     volumes:
-      - qdrant_data:/qdrant/storage  # Trajno čuvanje vektora na tvom disku
+      - qdrant_data:/qdrant/storage
     restart: always
 
 volumes:
-  qdrant_data:  # Definišemo imenovani volumen za trajnost podataka
+  qdrant_data:
