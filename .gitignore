@@ -7,3 +7,8 @@ RepositoryContents.txt
 documents/
 indexed_files.json
 indexed_files_groq.json
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
