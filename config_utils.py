@@ -10,7 +10,7 @@ from langchain_qdrant import QdrantVectorStore
 # --- SHARED CONFIGURATION ---
 DOCS_FOLDER = "./documents"
 INDEX_FILE = "indexed_files.json"
-COLLECTION_NAME = "rag_collection"
+COLLECTION_NAME = "rag_shared_collection"
 EMBEDDING_MODEL = "nomic-embed-text:latest"
 
 def md5_file(path):
@@ -23,7 +23,7 @@ def md5_file(path):
 def ensure_collection(client):
     collections = client.get_collections()
     if not any(c.name == COLLECTION_NAME for c in collections.collections):
-        print(f"📦 Creating collection: {COLLECTION_NAME}")
+        print(f"📦 Creating shared collection: {COLLECTION_NAME}")
         client.create_collection(
             collection_name=COLLECTION_NAME,
             vectors_config=VectorParams(size=768, distance=Distance.COSINE)
@@ -65,8 +65,14 @@ def sync_documents(client, embedding_model):
             all_docs.extend(splitter.split_documents(docs))
             
         if all_docs:
-            print(f"🔄 Indexing {len(all_docs)} new chunks...")
-            QdrantVectorStore.from_documents(all_docs, embedding_model, client=client, collection_name=COLLECTION_NAME)
+            print(f"🔄 Indexing {len(all_docs)} new chunks into shared collection...")
+            # Manually instantiate and add to bypass constructor argument conflicts in newer LangChain versions
+            vector_store = QdrantVectorStore(
+                client=client,
+                collection_name=COLLECTION_NAME,
+                embedding=embedding_model
+            )
+            vector_store.add_documents(all_docs)
             
     with open(INDEX_FILE, "w", encoding="utf-8") as f:
         json.dump(current_hashes, f, indent=4)
